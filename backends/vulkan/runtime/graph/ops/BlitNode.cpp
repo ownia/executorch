@@ -19,7 +19,11 @@ BlitNode::BlitNode(
     // const vkapi::ScalarType& dtype,
     const ResizeFunction& resize_fn,
     const std::vector<ValueRef>& resize_args)
-    : ExecuteNode(resize_fn, resize_args, {}, "Blit Node"),
+    : ExecuteNode(
+          resize_fn,
+          resize_args,
+          {{dst, vkapi::kWrite}, {src, vkapi::kRead}},
+          "Blit Node"),
       src_(src),
       dst_(dst) {
   (void)graph;

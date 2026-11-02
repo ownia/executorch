@@ -111,6 +111,45 @@ def op_node_count(graph_module: torch.fx.GraphModule, canonical_op_name: str) ->
     return count
 
 
+class TestRmsNormFusion(unittest.TestCase):
+    def test_scalar_epsilon(self):
+        class Model(torch.nn.Module):
+            def __init__(self, tensor_epsilon):
+                super().__init__()
+                self.eps = torch.tensor(1e-6) if tensor_epsilon else 1e-6
+
+            def forward(self, x, weight):
+                normalized = x.float()
+                normalized = normalized * torch.rsqrt(
+                    (normalized * normalized).mean(dim=-1, keepdim=True) + self.eps
+                )
+                return normalized.to(x.dtype) * weight
+
+        for dtype, tensor_epsilon in product(
+            (torch.float16, torch.float32), (False, True)
+        ):
+            with self.subTest(dtype=dtype, tensor_epsilon=tensor_epsilon):
+                model = Model(tensor_epsilon)
+                inputs = (
+                    torch.randn(2, 7, 13, dtype=dtype),
+                    torch.randn(13, dtype=dtype),
+                )
+                program = torch.export.export(model, inputs)
+                edge = to_edge(
+                    program,
+                    compile_config=EdgeCompileConfig(
+                        _skip_dim_order=True, _check_ir_validity=False
+                    ),
+                )
+                ep = edge.exported_program()
+                fuse_pass = FusePatternsPass()
+                fuse_pass._exported_program = ep
+                result = fuse_pass(ep.graph_module)
+                result.graph_module.graph.lint()
+                self.assertEqual(op_node_count(result.graph_module, "rms_norm.default"), 1)
+                torch.testing.assert_close(ep.module()(*inputs), model(*inputs))
+
+
 class TestSwiGLUFusion(unittest.TestCase):
     def _fuse(self, model, inputs, dynamic_shapes=None):
         program = torch.export.export(model, inputs, dynamic_shapes=dynamic_shapes)

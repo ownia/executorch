@@ -17,12 +17,14 @@
 #include <stdexcept>
 
 #ifndef SUPERTONIC_PURE_HELPERS_ONLY
-#include <executorch/backends/mlx/runtime/backend_options.h>
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
 #include <executorch/runtime/backend/options.h>
 #include <executorch/runtime/core/evalue.h>
+#ifdef EXECUTORCH_BUILD_MLX
+#include <executorch/backends/mlx/runtime/backend_options.h>
 #include <mlx/stream.h>
+#endif
 #endif
 
 namespace supertonic {
@@ -460,6 +462,12 @@ using ::executorch::runtime::Error;
 using ::executorch::runtime::EValue;
 using ::executorch::runtime::LoadBackendOptionsMap;
 
+void synchronize_backend() {
+#ifdef EXECUTORCH_BUILD_MLX
+  ::mlx::core::synchronize();
+#endif
+}
+
 std::vector<c10::Half> to_half(const std::vector<float>& values) {
   std::vector<c10::Half> result;
   result.reserve(values.size());
@@ -488,7 +496,7 @@ std::vector<float> copy_half_tensor(
           std::string(method) + " returned an incompatible shape");
     }
   }
-  ::mlx::core::synchronize();
+  synchronize_backend();
   const auto* source = tensor.const_data_ptr<c10::Half>();
   std::vector<float> result(tensor.numel());
   for (size_t index = 0; index < result.size(); ++index) {
@@ -564,6 +572,7 @@ class SupertonicRunner::Impl {
     metadata_ = validate_metadata_contract(method_names, metadata_values);
     processor_.configure_vocabulary(metadata_.text_vocabulary_size);
 
+#ifdef EXECUTORCH_BUILD_MLX
     BackendOptions<1> options;
     if (options.set_option(
             ::executorch::backends::mlx::kClearCacheIntervalKey, 1) !=
@@ -573,6 +582,7 @@ class SupertonicRunner::Impl {
             Error::Ok) {
       throw std::runtime_error("failed to configure MLX backend options");
     }
+#endif
     for (const char* method :
          {"duration_predictor",
           "text_encoder",
@@ -629,7 +639,7 @@ class SupertonicRunner::Impl {
         options.inter_chunk_silence);
     result.duration_seconds = static_cast<float>(
         static_cast<double>(result.waveform.size()) / metadata_.sample_rate);
-    ::mlx::core::synchronize();
+    synchronize_backend();
     result.elapsed_seconds =
         std::chrono::duration<double>(
             std::chrono::steady_clock::now() - synthesis_started)
@@ -658,7 +668,7 @@ class SupertonicRunner::Impl {
     if (!outputs.ok()) {
       throw std::runtime_error(std::string("PTE method failed: ") + method);
     }
-    ::mlx::core::synchronize();
+    synchronize_backend();
     return std::move(outputs.get());
   }
 

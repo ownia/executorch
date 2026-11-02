@@ -5,11 +5,13 @@
 # LICENSE file in the root directory of this source tree.
 
 import json
+import sys
+from unittest.mock import Mock
 
 import pytest
 import torch
 
-from examples.models.supertonic.export import common
+from examples.models.supertonic.export import common, export_supertonic
 from examples.models.supertonic.loaders import checkpoint_loader
 from examples.models.supertonic.model.config import TTSConfig
 from torch import nn
@@ -423,3 +425,173 @@ def test_fp16_conversion_preserves_integer_tensors() -> None:
     assert model.bias.dtype == torch.float16
     assert model.float_buffer.dtype == torch.float16
     assert model.integer_buffer.dtype == torch.int64
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected_backend", "quantization"),
+    [
+        (None, "mlx", "none"),
+        ("mlx", "mlx", "none"),
+        ("vulkan", "vulkan", "none"),
+        ("vulkan", "vulkan", "w8"),
+    ],
+)
+def test_export_from_assets_selects_backend(
+    backend, expected_backend, quantization, tmp_path, monkeypatch
+) -> None:
+    config = _config()
+    bounds = common.ExportBounds(4, 3)
+    models = {name: nn.Linear(2, 2) for name in common.METHOD_NAMES}
+    programs = {name: object() for name in common.METHOD_NAMES}
+    edge_program = object()
+    et_program = object()
+    asset_dir = tmp_path / "assets"
+    output_path = tmp_path / "supertonic.pte"
+    load_models = Mock(return_value=(config, models))
+    vocabulary_size = Mock(return_value=256)
+    export_programs = Mock(return_value=programs)
+    lower_mlx = Mock(return_value=edge_program)
+    lower_vulkan = Mock(return_value=edge_program)
+    to_executorch = Mock(return_value=et_program)
+    save_pte = Mock(return_value=output_path)
+    monkeypatch.setattr(common, "load_models", load_models)
+    monkeypatch.setattr(common, "text_vocabulary_size", vocabulary_size)
+    monkeypatch.setattr(export_supertonic, "export_programs", export_programs)
+    monkeypatch.setattr(export_supertonic, "lower_to_mlx", lower_mlx)
+    monkeypatch.setattr(export_supertonic, "lower_to_vulkan", lower_vulkan)
+    monkeypatch.setattr(export_supertonic, "to_executorch", to_executorch)
+    monkeypatch.setattr(common, "save_pte", save_pte)
+
+    if backend is None:
+        result = export_supertonic.export_from_assets(
+            asset_dir, output_path, bounds=bounds
+        )
+    else:
+        result = export_supertonic.export_from_assets(
+            asset_dir,
+            output_path,
+            backend=backend,
+            quantization=quantization,
+            bounds=bounds,
+        )
+
+    assert result == output_path
+    load_models.assert_called_once_with(asset_dir)
+    vocabulary_size.assert_called_once_with(models)
+    assert all(model.weight.dtype == torch.float16 for model in models.values())
+    export_programs.assert_called_once_with(
+        models,
+        config,
+        bounds,
+        flow_steps=common.DEFAULT_FLOW_STEPS,
+        backend=expected_backend,
+        quantization=quantization,
+    )
+    metadata = common.runtime_metadata(config, bounds, text_vocabulary_size=256)
+    for name, lower in (("mlx", lower_mlx), ("vulkan", lower_vulkan)):
+        if name == expected_backend:
+            lower.assert_called_once_with(programs, metadata)
+        else:
+            lower.assert_not_called()
+    to_executorch.assert_called_once_with(edge_program)
+    save_pte.assert_called_once_with(et_program, output_path)
+
+
+def test_export_rejects_unknown_backend_before_loading_assets(
+    tmp_path, monkeypatch
+) -> None:
+    load_models = Mock()
+    monkeypatch.setattr(common, "load_models", load_models)
+
+    with pytest.raises(ValueError, match="unsupported backend 'cpu'"):
+        export_supertonic.export_from_assets(
+            tmp_path, tmp_path / "supertonic.pte", backend="cpu"
+        )
+
+    load_models.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("backend", "quantization", "error"),
+    [
+        ("vulkan", "w4", "unsupported quantization 'w4'"),
+        ("mlx", "w8", "w8 quantization requires the Vulkan backend"),
+    ],
+)
+def test_export_rejects_invalid_quantization_before_loading_assets(
+    backend, quantization, error, tmp_path, monkeypatch
+) -> None:
+    load_models = Mock()
+    monkeypatch.setattr(common, "load_models", load_models)
+
+    with pytest.raises(ValueError, match=error):
+        export_supertonic.export_from_assets(
+            tmp_path,
+            tmp_path / "supertonic.pte",
+            backend=backend,
+            quantization=quantization,
+        )
+
+    load_models.assert_not_called()
+
+
+@pytest.mark.parametrize("backend", [None, "mlx", "vulkan"])
+def test_cli_forwards_backend_and_export_bounds(backend, monkeypatch) -> None:
+    argv = [
+        "export_supertonic",
+        "--asset-dir",
+        "assets",
+        "--output",
+        "supertonic.pte",
+        "--max-text-length",
+        "4",
+        "--max-latent-length",
+        "3",
+    ]
+    if backend is not None:
+        argv.extend(("--backend", backend))
+    export_from_assets = Mock()
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(export_supertonic, "export_from_assets", export_from_assets)
+
+    export_supertonic.main()
+
+    export_from_assets.assert_called_once_with(
+        "assets",
+        "supertonic.pte",
+        backend="mlx" if backend is None else backend,
+        quantization="none",
+        bounds=common.ExportBounds(4, 3),
+        flow_steps=common.DEFAULT_FLOW_STEPS,
+    )
+
+
+def test_cli_forwards_w8_quantization(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_supertonic",
+            "--asset-dir",
+            "assets",
+            "--output",
+            "supertonic.pte",
+            "--backend",
+            "vulkan",
+            "--quantization",
+            "w8",
+        ],
+    )
+    export_from_assets = Mock()
+    monkeypatch.setattr(export_supertonic, "export_from_assets", export_from_assets)
+
+    export_supertonic.main()
+
+    export_from_assets.assert_called_once_with(
+        "assets",
+        "supertonic.pte",
+        backend="vulkan",
+        quantization="w8",
+        bounds=common.ExportBounds(),
+        flow_steps=common.DEFAULT_FLOW_STEPS,
+    )

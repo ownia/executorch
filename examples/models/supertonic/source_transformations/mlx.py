@@ -226,14 +226,15 @@ def replace_vocoder_causal_padding(model: Vocoder) -> Vocoder:
 
 def replace_relative_attention(
     model: DurationPredictor | TextEncoder,
+    *,
+    attention_type: type[MLXRelativeMultiHeadAttention] = MLXRelativeMultiHeadAttention,
 ) -> DurationPredictor | TextEncoder:
     if isinstance(model, DurationPredictor):
         encoder = model.sentence_encoder.attn_encoder
     else:
         encoder = model.text_encoder.attn_encoder
     encoder.attn_layers = nn.ModuleList(
-        MLXRelativeMultiHeadAttention.from_attention(attention)
-        for attention in encoder.attn_layers
+        attention_type.from_attention(attention) for attention in encoder.attn_layers
     )
     return model
 

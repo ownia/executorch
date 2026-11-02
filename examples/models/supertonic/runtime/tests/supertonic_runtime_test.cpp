@@ -146,6 +146,15 @@ void test_preprocessing() {
       preprocess_text("Caf\xC3\xA9", "en") == "<en>Cafe\xCC\x81.</en>",
       "NFKD preprocessing mismatch");
   check(
+      preprocess_text("\xEF\xAC\x81\xE2\x85\xA3", "en") == "<en>fiIV.</en>",
+      "NFKD compatibility decomposition mismatch");
+  check_throws(
+      [] { (void)preprocess_text("\xC0\xAF", "en"); },
+      "text is not valid UTF-8");
+  check_throws(
+      [] { (void)preprocess_text("\xF4\x90\x80\x80", "en"); },
+      "text is not valid UTF-8");
+  check(
       preprocess_text(
           "\xE2\x80\x9CHello\xE2\x80\x9D \xE2\x80\x94 world_"
           "\xF0\x9F\x99\x82 @ x \xE2\x99\xA5 e.g., i.e., [done]",

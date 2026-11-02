@@ -8,6 +8,7 @@ from typing import Optional
 
 import torch
 
+from executorch.backends.transforms.utils import get_param_tensor, is_param_node
 from executorch.backends.vulkan.patterns.pattern_registry import (
     PatternMatch,
     register_pattern_detector,
@@ -245,13 +246,15 @@ def find_rms_norm_patterns(
 ##
 
 
-def _extract_eps_value(eps_node) -> float:
+def _extract_eps_value(ep: ExportedProgram, eps_node) -> float:
     if isinstance(eps_node, (int, float)):
         return float(eps_node)
-    if isinstance(eps_node, torch.fx.Node) and "val" in eps_node.meta:
-        val = eps_node.meta["val"]
-        if isinstance(val, torch.Tensor):
-            return float(val.item())
+    if isinstance(eps_node, torch.fx.Node):
+        if is_param_node(ep, eps_node):
+            val = get_param_tensor(ep, eps_node)
+            if val is not None:
+                return float(val.item())
+        val = eps_node.meta.get("val")
         if isinstance(val, (int, float)):
             return float(val)
     raise ValueError(f"Cannot extract epsilon value from {eps_node}")
@@ -263,7 +266,7 @@ def replace_rms_norm_with_fused_op(
     graph_module: torch.fx.GraphModule,
     match: RmsNormMatch,
 ):
-    eps_val = _extract_eps_value(match.eps_node)
+    eps_val = _extract_eps_value(ep, match.eps_node)
 
     with graph_module.graph.inserting_before(match.anchor_node):
         rms_norm_node = graph_module.graph.create_node(

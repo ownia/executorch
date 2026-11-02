@@ -8,12 +8,21 @@
 
 #include "text_processor.h"
 
-#include <CoreFoundation/CoreFoundation.h>
 #include <nlohmann/json.hpp>
+
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#else
+#include <unicode/normalizer2.h>
+#include <unicode/uchar.h>
+#include <unicode/unistr.h>
+#include <unicode/ustring.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -85,6 +94,7 @@ std::string encode_utf8(const std::u32string& text) {
 }
 
 std::string normalize_nfkd(const std::string& text) {
+#ifdef __APPLE__
   CFStringRef source = CFStringCreateWithBytes(
       kCFAllocatorDefault,
       reinterpret_cast<const UInt8*>(text.data()),
@@ -109,6 +119,39 @@ std::string normalize_nfkd(const std::string& text) {
   }
   CFRelease(normalized);
   return output.data();
+#else
+  if (text.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+    throw std::invalid_argument("text is too long to normalize");
+  }
+  const auto input_length = static_cast<int32_t>(text.size());
+  std::vector<UChar> source(text.size());
+  int32_t source_length = 0;
+  UErrorCode status = U_ZERO_ERROR;
+  u_strFromUTF8(
+      source.data(),
+      input_length,
+      &source_length,
+      text.data(),
+      input_length,
+      &status);
+  if (U_FAILURE(status)) {
+    throw std::runtime_error("text is not valid UTF-8");
+  }
+  status = U_ZERO_ERROR;
+  const auto* normalizer = icu::Normalizer2::getNFKDInstance(status);
+  if (U_FAILURE(status)) {
+    throw std::runtime_error("failed to initialize Unicode normalization");
+  }
+  icu::UnicodeString normalized;
+  normalizer->normalize(
+      icu::UnicodeString(source.data(), source_length), normalized, status);
+  if (U_FAILURE(status) || normalized.isBogus()) {
+    throw std::runtime_error("failed to normalize text");
+  }
+  std::string output;
+  normalized.toUTF8String(output);
+  return output;
+#endif
 }
 
 bool is_emoji(char32_t value) {
@@ -120,9 +163,13 @@ bool is_emoji(char32_t value) {
 }
 
 bool is_unicode_whitespace(char32_t value) {
+#ifdef __APPLE__
   return CFCharacterSetIsLongCharacterMember(
       CFCharacterSetGetPredefined(kCFCharacterSetWhitespaceAndNewline),
       static_cast<UTF32Char>(value));
+#else
+  return u_isUWhiteSpace(static_cast<UChar32>(value));
+#endif
 }
 
 std::string canonicalize_whitespace(

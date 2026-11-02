@@ -12,6 +12,10 @@
 #include <gflags/gflags.h>
 #include <nlohmann/json.hpp>
 
+#ifdef __linux__
+#include <fcntl.h>
+#include <linux/fs.h>
+#endif
 #include <unistd.h>
 #include <cerrno>
 #include <chrono>
@@ -26,7 +30,10 @@
 #include <stdexcept>
 #include <string>
 
-DEFINE_string(pte, "", "Path to the single Supertonic FP16 MLX .pte file.");
+DEFINE_string(
+    pte,
+    "",
+    "Path to the single Supertonic FP16-activation .pte file.");
 DEFINE_string(
     asset_dir,
     "",
@@ -163,7 +170,18 @@ void write_wav_without_overwrite(
           std::strerror(close_error));
     }
     temporary_fd = -1;
-    if (renamex_np(temporary.c_str(), output.c_str(), RENAME_EXCL) != 0) {
+#ifdef __APPLE__
+    const int rename_result =
+        renamex_np(temporary.c_str(), output.c_str(), RENAME_EXCL);
+#else
+    const int rename_result = renameat2(
+        AT_FDCWD,
+        temporary.c_str(),
+        AT_FDCWD,
+        output.c_str(),
+        RENAME_NOREPLACE);
+#endif
+    if (rename_result != 0) {
       const int rename_error = errno;
       if (rename_error == EEXIST) {
         throw std::invalid_argument(
@@ -292,7 +310,7 @@ int run_jsonl_server(
 
 int main(int argc, char** argv) {
   gflags::SetUsageMessage(
-      "Synthesize Supertonic speech with a batch-1 FP16 MLX PTE.");
+      "Synthesize Supertonic speech with a batch-1 FP16-activation PTE.");
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   try {
     if (FLAGS_pte.empty() || FLAGS_asset_dir.empty() ||

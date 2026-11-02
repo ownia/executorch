@@ -17,12 +17,26 @@
             "displayName": "Supertonic runner (MLX)",
             "inherits": ["supertonic-base"],
             "cacheVariables": {
-                "EXECUTORCH_BUILD_MLX": "ON"
+                "EXECUTORCH_BUILD_MLX": "ON",
+                "EXECUTORCH_BUILD_VULKAN": "OFF"
             },
             "condition": {
                 "type": "equals",
                 "lhs": "${hostSystemName}",
                 "rhs": "Darwin"
+            }
+        },
+        {
+            "name": "supertonic-vulkan",
+            "displayName": "Supertonic runner (Vulkan)",
+            "inherits": ["supertonic-base"],
+            "cacheVariables": {
+                "EXECUTORCH_BUILD_VULKAN": "ON"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
             }
         }
     ],
@@ -36,6 +50,17 @@
                 "supertonic_runner",
                 "supertonic_runtime_test"
             ]
+        },
+        {
+            "name": "supertonic-vulkan",
+            "displayName": "Build Supertonic Vulkan runner and tests",
+            "configurePreset": "supertonic-vulkan",
+            "configuration": "Release",
+            "targets": [
+                "supertonic_runner",
+                "supertonic_runtime_test",
+                "supertonic_vulkan_test"
+            ]
         }
     ],
     "testPresets": [
@@ -43,6 +68,15 @@
             "name": "supertonic-mlx",
             "displayName": "Test Supertonic runner",
             "configurePreset": "supertonic-mlx",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "supertonic-vulkan",
+            "displayName": "Test Supertonic Vulkan runner",
+            "configurePreset": "supertonic-vulkan",
             "configuration": "Release",
             "output": {
                 "outputOnFailure": true
@@ -61,6 +95,20 @@
                 {
                     "type": "build",
                     "name": "supertonic-mlx"
+                }
+            ]
+        },
+        {
+            "name": "supertonic-vulkan",
+            "displayName": "Configure and build Supertonic runner (Vulkan)",
+            "steps": [
+                {
+                    "type": "configure",
+                    "name": "supertonic-vulkan"
+                },
+                {
+                    "type": "build",
+                    "name": "supertonic-vulkan"
                 }
             ]
         }
